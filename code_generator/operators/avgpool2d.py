@@ -47,6 +47,11 @@ default_params = {
     "kernel_w": None,
     "input_dtype": "int8",
     "output_dtype": "int8",
+    # Shiming:
+    "padding_h": None,
+    "padding_w": None,
+    "padding_h_offset": None,
+    "padding_w_offset": None,
 }
 
 
@@ -76,13 +81,30 @@ class AvgPool2d(basicOperator):
 
     def generate_inference_str(self):
         params = self.params
-        string = (
-            f"avg_pooling({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-            + f"{str(params['input_h'])},{str(params['input_w'])},{str(params['input_c'])},{str(params['filter_h'])},"
-        )
-        string += (
-            f"{str(params['filter_w'])},1,1,-128,127,"
-            f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
-        )
+        # Shiming: fix params
+        filter_h = params["filter_h"]
+        filter_w = params["filter_w"]
+        stride_h = params["stride_h"]
+        stride_w = params["stride_w"]
+        padding_h = params["padding_h"]
+        padding_w = params["padding_w"]
+        padding_h_offset = params["padding_h_offset"]
+        padding_w_offset = params["padding_w_offset"]
+        has_pad = (padding_h + padding_w \
+                    + padding_h_offset + padding_w_offset != 0)
+        if ((filter_h == stride_h)
+            and (filter_w == stride_w)
+            and (not has_pad)
+        ): # simple avg_pooling
+            string = (
+                f"avg_pooling({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+                + f"{str(params['input_h'])},{str(params['input_w'])},{str(params['input_c'])},{str(params['filter_h'])},"
+            )
+            string += (
+                f"{str(params['filter_w'])},1,1,-128,127,"
+                f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+            )
+        else:
+            raise NotImplementedError
 
         return string

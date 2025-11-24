@@ -4,7 +4,14 @@ from code_generator.tflite.BuiltinOptions import BuiltinOptions
 from code_generator.tflite.Padding import Padding
 from code_generator.tflite.Pool2DOptions import Pool2DOptions
 
-from .utils import get_input_tensors, get_output_tensors, getOpCodeStr, getTensorTypeStr
+from .utils import (
+    # Shiming:
+    compute_padding,
+    get_input_tensors, 
+    get_output_tensors, 
+    getOpCodeStr, 
+    getTensorTypeStr
+)
 
 
 def parse_avgpool(op, model: Model.Model):
@@ -55,6 +62,12 @@ def parse_avgpool(op, model: Model.Model):
     input_scale = input_tensor.qnn_params["scale"]
     output_scale = output_tensor.qnn_params["scale"]
 
+    
+    # Shiming:
+    padding_h, padding_h_offset = compute_padding(stride_h, 1, input_h, 
+                                filter_h, output_h)
+    padding_w, padding_w_offset = compute_padding(stride_w, 1, input_w, 
+                                filter_w, output_w)
     params = {
         # operator
         "op": op_code_str,
@@ -63,8 +76,11 @@ def parse_avgpool(op, model: Model.Model):
         "filter_w": filter_w,
         "stride_h": stride_h,
         "stride_w": stride_w,
-        "pad_h": pad_h,
-        "pad_w": pad_w,
+        # Shiming:
+        "padding_h": padding_h,
+        "padding_w": padding_w,
+        "padding_h_offset": padding_h_offset,
+        "padding_w_offset": padding_w_offset,
         # tensor
         "input_idx": input_tensor.tensor_idx,
         "output_idx": output_tensor.tensor_idx,

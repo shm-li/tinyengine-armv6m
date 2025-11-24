@@ -126,19 +126,52 @@ class TfliteConvertor(object):
         elif op_code_str == "RESIZE_NEAREST_NEIGHBOR":
             self.layer.append(TF_Parser.parse_upsample(op, self.model))
         elif op_code_str == "MAX_POOL_2D":
-            self.layer.append(TF_Parser.parse_maxpool(op, self.model))
+            self.layer.append(TF_Parser.parse_maxpool(op, self.model, self.tmpPADIndice))
+            # Shiming: allow merging previous padding layer with max_pool
+            self.tmpPADIndice = None
         elif op_code_str in "MEAN":
-            ret_op = TF_Parser.parse_mead1dto2d(op, self.model, self.average_1D_to_2D_holder)
-            if ret_op is not None:
-                # TODO: This only handle a specific graph: TRANSPOSE -> MEAN -> MEANS
-                if self.skip_transpose is not None:
-                    ret_op.params["input_idx"] = self.skip_transpose.input_idx
-                    ret_op.input_tensors[0].graph_idx = self.skip_transpose.input_idx
-                self.layer.append(ret_op)
+            # Shiming: using my own MEAN
+            # ret_op = TF_Parser.parse_mead1dto2d(op, self.model, self.average_1D_to_2D_holder)
+            # if ret_op is not None:
+            #     # TODO: This only handle a specific graph: TRANSPOSE -> MEAN -> MEANS
+            #     if self.skip_transpose is not None:
+            #         ret_op.params["input_idx"] = self.skip_transpose.input_idx
+            #         ret_op.input_tensors[0].graph_idx = self.skip_transpose.input_idx
+            #     self.layer.append(ret_op)
+            self.layer.append(TF_Parser.parse_reduce(op, self.model, "mean"))
         elif op_code_str == "TRANSPOSE":
-            self._convert_TRANSPOSE(op)
+            # Shiming: we need to implement this op
+            self.layer.append(TF_Parser.parse_transpose(op, self.model))
+            # self._convert_TRANSPOSE(op)
         elif op_code_str == "FULLY_CONNECTED":
             self.layer.append(TF_Parser.parse_fc(op, self.model))
+        # Shiming:
+        elif op_code_str == "QUANTIZE":
+            self.layer.append(TF_Parser.parse_quantize(op, self.model))
+        elif op_code_str == "RESHAPE":
+            ret_op = TF_Parser.parse_reshape(op, self.model)
+            if ret_op.params["keep_length"]:
+                # Hard-coded: skip tensor connection to RESHAPE layers
+                self._remove_RESHAPE(ret_op)
+                # self.layer[-1].change_output_tensor_idx(
+                #     ret_op.output_tensors[0].graph_idx
+                # )
+            else:
+                raise NotImplementedError(f"RESHAPE layer tries to change "
+                                          "total tensor length")
+        elif op_code_str == "SOFTMAX":
+            self.layer.append(TF_Parser.parse_softmax(op, self.model))
+        elif op_code_str == "REDUCE_MAX":
+            self.layer.append(TF_Parser.parse_reduce(op, self.model, "max"))
+        elif op_code_str == "SHAPE":
+            self.layer.append(TF_Parser.parse_shape(op, self.model))
+        elif op_code_str == "STRIDED_SLICE":
+            self.layer.append(TF_Parser.parse_strided_slice(op, self.model))
+        elif op_code_str == "PACK":
+            self.layer.append(TF_Parser.parse_pack(op, self.model))
+        elif op_code_str == "MUL":
+            # Need to support MUL...
+            self.layer.append(TF_Parser.parse_mul(op, self.model))
         elif op_code_str in SKIP_OPs:
             pass
         else:
@@ -160,13 +193,17 @@ class TfliteConvertor(object):
         # get input, weight, and output tensors
         input_tensors = get_input_tensors(op, self.model)
         input_tensor = input_tensors[0]
+        paddings = input_tensors[1]
 
         output_tensors = get_output_tensors(op, self.model)
         assert len(output_tensors) == 1, "output tensors length should be 1"
         output_tensor = output_tensors[0]
 
         # fuse pad into conv
-        self.tmpPADIndice = PAD_tensorIndice(input_tensor.tensor_idx, output_tensor.tensor_idx)
+        self.tmpPADIndice = PAD_tensorIndice(
+            input_tensor.tensor_idx, output_tensor.tensor_idx,
+            input_tensor, paddings
+        )
 
     def _convert_TRANSPOSE(self, op):
         # get input, weight, and output tensors
@@ -180,8 +217,43 @@ class TfliteConvertor(object):
         # fuse pad into conv
         self.skip_transpose = PAD_tensorIndice(input_tensor.tensor_idx, output_tensor.tensor_idx)
 
+    def _remove_RESHAPE(self, op):
+        # Delete layer, since data are placed continuously in the buffer anyway
+        # Skip data connection: last layer just outputs to SHAPE's output
+        keep_searching = True
+        while keep_searching:
+            keep_searching = False
+            for l in self.layer:
+                if l.output_tensors[0].graph_idx \
+                            == op.input_tensors[0].graph_idx:
+                    print("Connecting {:s}'s output to RESHAPE's output".format(l.params["op"]))
+                    l.change_output_tensor_idx(
+                        op.output_tensors[0].graph_idx
+                    )
+                    keep_searching = True
+        # Delete shape tensor computation, if any
+        keep_searching = True
+        useless_tensor_idx = [str(op.params["shape_idx"])]
+        while keep_searching:
+            keep_searching = False
+            to_del = None
+            for idx, l in enumerate(self.layer):
+                if (len(l.output_tensors) == 1) and \
+                        (l.output_tensors[0].graph_idx in useless_tensor_idx):
+                    for in_tensor in l.input_tensors:
+                        useless_tensor_idx.append(in_tensor.graph_idx)
+                    to_del = idx
+                    break
+            if to_del is not None:
+                print("Deleting parsed layer {:d}: {:s}".format(to_del, self.layer[to_del].params["op"]))
+                del self.layer[to_del]
+                keep_searching = True
+
+
 
 class PAD_tensorIndice(object):
-    def __init__(self, input_idx, output_idx):
+    def __init__(self, input_idx, output_idx, last_input_tensor, paddings):
         self.input_idx = input_idx
         self.output_idx = output_idx
+        self.last_input_tensor = last_input_tensor
+        self.paddings = paddings

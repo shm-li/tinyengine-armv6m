@@ -47,6 +47,9 @@ def get_np_from_wrapper(wrapper):
 
     data = wrapper.buffer.DataAsNumpy()
     shape = wrapper.tensor.ShapeAsNumpy() if wrapper.tensor.ShapeLength() != 0 else []
+    
+    # Shiming: if there is no data
+    if (type(data) == int) and (data == 0): return None
 
     return np.frombuffer(data, dtype=dtype).reshape(shape)
 
@@ -63,6 +66,15 @@ def _get_wrapper_tensors(tensor_index_list, model: Model.Model):
     ret = []
     subgraph = model.Subgraphs(0)
     for idx in tensor_index_list:
+        # Shiming: bias tensor can be None
+        if idx == -1:
+            ret.append(TFLiteTensorWrpper(
+                tensor_idx=-1, 
+                tensor=None, 
+                buffer=None, 
+                qnn_params={"scale": 1.0, "zero_point": 0}
+            ))
+            continue
         tensor = subgraph.Tensors(idx)
         buffer_idx = tensor.Buffer()
         buffer = model.Buffers(buffer_idx)
@@ -181,3 +193,23 @@ def get_nhwc_from_shape(shape):
     elif len(shape) == 1:
         c = shape[0]
     return n, h, w, c
+
+
+# Shiming: 
+# Do the same as TFLM kernels/padding.h
+def compute_out_size(padding, image_size, filter_size, stride, dilation=1):
+    if stride == 0: return 0
+    if padding == 0: # SAME
+        return (image_size + stride - 1) // stride
+    elif padding == 1: # VALID
+        return (image_size + stride - 
+                ((filter_size - 1) * dilation + 1)) // stride
+def compute_padding(stride, dilation, in_size, filter_size, out_size):
+    effective_filter_size = (filter_size - 1) * dilation + 1
+    total_padding = (out_size - 1) * stride \
+            + effective_filter_size - in_size
+    if total_padding < 0: total_padding = 0
+    offset = total_padding % 2 # offset is for non-symmetric padding
+    # print(offset, total_padding)
+    # assert offset == 0, "tflite models should have symmetric padding!"
+    return total_padding // 2, offset

@@ -1,5 +1,7 @@
 class depthwiseInplace_mask(object):
-    def __init__(self, kernel_h, kernel_w, pad_h, pad_w, stride, dataflow="CHW", fp_requantize=False):
+    def __init__(self, kernel_h, kernel_w, pad_h, pad_w, 
+                 pad_h_offset, pad_w_offset,
+                 stride, dataflow="CHW", fp_requantize=False):
         self.pad_h = pad_h
         self.pad_w = pad_w
         self.kernel_h = kernel_h
@@ -8,6 +10,13 @@ class depthwiseInplace_mask(object):
         self.arch = "ARMv7E-M"  # by default
         self.dataflow = dataflow
         self.fp_requantize = fp_requantize
+        # Shiming: fix padding
+        self.pad_h_offset = pad_h_offset
+        self.pad_w_offset = pad_w_offset
+        self.pad_top = pad_h
+        self.pad_left = pad_w
+        self.pad_bottom = pad_h + pad_h_offset
+        self.pad_right = pad_w + pad_w_offset
 
     def setArch(self, arch):
         self.arch = arch
@@ -34,7 +43,9 @@ class depthwiseInplace_mask(object):
 
         return retString
 
+    # Shiming: rename
     def __getFunctionName(self):
+        assert (self.pad_h == self.pad_w) and (self.pad_h_offset == self.pad_w_offset)
         return (
             "depthwise_kernel"
             + str(self.kernel_h)
@@ -42,12 +53,18 @@ class depthwiseInplace_mask(object):
             + str(self.kernel_w)
             + "_stride"
             + str(self.stride)
+            + "_pad"
+            + str(self.pad_h)
+            + "_padoffset"
+            + str(self.pad_h_offset)
             + "_inplace_"
             + self.dataflow
             + "_fpreq_mask"
         )
 
+    # Shiming: rename
     def __getKernelName(self):
+        assert (self.pad_h == self.pad_w) and (self.pad_h_offset == self.pad_w_offset)
         return (
             "depthwise_kernel"
             + str(self.kernel_h)
@@ -55,6 +72,10 @@ class depthwiseInplace_mask(object):
             + str(self.kernel_w)
             + "_stride"
             + str(self.stride)
+            + "_pad"
+            + str(self.pad_h)
+            + "_padoffset"
+            + str(self.pad_h_offset)
             + "_inplace_kernel_"
             + self.dataflow
             + "_fpreq_mask"
@@ -111,6 +132,7 @@ class depthwiseInplace_mask(object):
         return retString
 
     def __genBufferInitialization(self):
+        # Shiming: fix padding
         retString = (
             """
     uint16_t c,i,j;
@@ -120,12 +142,15 @@ class depthwiseInplace_mask(object):
     //Set padding value
     q7_t PAD8 = pad_value;
     /* setup the padding regions for Im2col buffers */
-    //top region: 8bit x (input_x + pad_w * 2) x pad_h: unroll by pad value
+    //pad_left: """ + str(self.pad_left) + ", pad_right: " + str(self.pad_right)
+    + ", pad_top: " + str(self.pad_top) + ", pad_bottom: " + str(self.pad_bottom) +
+    """
+    //top region: 8bit x (input_x + pad_left + pad_right) x pad_top: unroll by pad value
     for(i = 0; i < input_x + """
-            + str(self.pad_w * 2)
+            + str(self.pad_left) + " + " + str(self.pad_right)
             + """; i++){"""
         )
-        for i in range(self.pad_h):
+        for i in range(self.pad_top):
             retString += """
         *cols_8b++ = PAD8;"""
         retString += """
@@ -133,24 +158,24 @@ class depthwiseInplace_mask(object):
 
     //middle regions: left and right regions
     for(i = 0; i < input_y; i++){"""
-        for i in range(self.pad_w):
+        for i in range(self.pad_left):
             retString += """
         *cols_8b++ = PAD8;//left"""
         retString += """
         cols_8b += input_x; //skip middle"""
-        for i in range(self.pad_w):
+        for i in range(self.pad_right):
             retString += """
         *cols_8b++ = PAD8;//right"""
         retString += (
             """
     }
 
-    //bottom region: 8bit x (input_x + pad_w * 2) x pad_h: unroll by pad value
+    //bottom region: 8bit x (input_x + pad_left + pad_right) x pad_bottom: unroll by pad value
     for(i = 0; i < input_x + """
-            + str(self.pad_w * 2)
+            + str(self.pad_left) + " + " + str(self.pad_right)
             + """; i++){"""
         )
-        for i in range(self.pad_h):
+        for i in range(self.pad_bottom):
             retString += """
         *cols_8b++ = PAD8;"""
         retString += """
@@ -162,6 +187,7 @@ class depthwiseInplace_mask(object):
         return retString
 
     def __genBufferInitializationCWH(self):
+        # Shiming: fix padding
         # HWC to CWH data flow
         retString = (
             """
@@ -173,12 +199,15 @@ class depthwiseInplace_mask(object):
     //Set padding value
     q7_t PAD8 = pad_value;
     /* setup the padding regions for Im2col buffers */
-    //top region: 8bit x (input_y + pad_h * 2) x pad_w: unroll by pad value
+    //pad_left: """ + str(self.pad_left) + ", pad_right: " + str(self.pad_right)
+    + ", pad_top: " + str(self.pad_top) + ", pad_bottom: " + str(self.pad_bottom) +
+    """
+    //top region: 8bit x (input_y + pad_top + pad_bottom) x pad_left: unroll by pad value
     for(i = 0; i < input_y + """
-            + str(self.pad_h * 2)
+            + str(self.pad_top) + " + " + str(self.pad_bottom)
             + """; i++){"""
         )
-        for i in range(self.pad_w):
+        for i in range(self.pad_left):
             retString += """
         *cols_8b++ = PAD8;"""
         retString += """
@@ -186,24 +215,24 @@ class depthwiseInplace_mask(object):
 
     //middle regions: left and right regions
     for(i = 0; i < input_x; i++){"""
-        for i in range(self.pad_h):
+        for i in range(self.pad_top):
             retString += """
         *cols_8b++ = PAD8;//left"""
         retString += """
         cols_8b += input_y; //skip middle"""
-        for i in range(self.pad_h):
+        for i in range(self.pad_bottom):
             retString += """
         *cols_8b++ = PAD8;//right"""
         retString += (
             """
     }
 
-    //bottom region: 8bit x (input_y + pad_h * 2) x pad_w: unroll by pad value
+    //bottom region: 8bit x (input_y + pad_top + pad_bottom) x pad_right: unroll by pad value
     for(i = 0; i < input_y + """
-            + str(self.pad_h * 2)
+            + str(self.pad_top) + " + " + str(self.pad_bottom)
             + """; i++){"""
         )
-        for i in range(self.pad_w):
+        for i in range(self.pad_right):
             retString += """
         *cols_8b++ = PAD8;"""
         retString += """
@@ -226,26 +255,29 @@ class depthwiseInplace_mask(object):
         return retString
 
     def __genFixedLoadHWC2CWH(self):
+        # Shiming: fix padding
         retString = (
             """
         cols_8b = (q7_t*)(cols_8b_start + """
-            + str(self.pad_w)
-            + """ * (input_y) + """
-            + str(self.pad_h * self.pad_w * 2)
-            + """); //skip """
-            + str(self.pad_w)
+            + str(self.pad_left)
+            + """ * ((input_y) + """
+            + str(self.pad_top)
+            + " + "
+            + str(self.pad_bottom)
+            + """)); //skip """
+            + str(self.pad_left)
             + """ rows
         src = input;
         for(i = 0; i < input_x; i++){
             cols_8b += """
-            + str(self.pad_h)
+            + str(self.pad_top)
             + """;//skip front
             for(j = 0; j < input_y; j++){
                 *cols_8b++ = src[input_x * j * input_ch];// + input_offset;
             }
             src += input_ch;
             cols_8b += """
-            + str(self.pad_h)
+            + str(self.pad_bottom)
             + """;//skip end
         }\n"""
         )
@@ -264,26 +296,29 @@ class depthwiseInplace_mask(object):
         return retString
 
     def __genFixedLoadHWC2CHW(self):
+        # Shiming: fix padding
         retString = (
             """
         cols_8b = (q7_t*)(cols_8b_start + """
-            + str(self.pad_h)
-            + """ * (input_x) + """
-            + str(self.pad_h * self.pad_w * 2)
-            + """); //skip """
-            + str(self.pad_h)
+            + str(self.pad_top)
+            + """ * ((input_x) + """
+            + str(self.pad_left)
+            + " + "
+            + str(self.pad_right)
+            + """)); //skip """
+            + str(self.pad_top)
             + """ rows
         src = input;
         for(i = 0; i < input_y; i++){
             cols_8b += """
-            + str(self.pad_w)
+            + str(self.pad_left)
             + """;//skip front
             for(j = 0; j < input_x; j++){
                 *cols_8b++ = *src;// + input_offset;
                 src += input_ch;
             }
             cols_8b += """
-            + str(self.pad_w)
+            + str(self.pad_right)
             + """;//skip end
         }\n"""
         )
@@ -372,11 +407,12 @@ class depthwiseInplace_mask(object):
         return ret
 
     def __genConvString(self):
+        # Shiming: fix padding
         retString = ""
         kercnt = 0
         for i in range(self.kernel_h):
             if i > 0:
-                retString += "            cols_8b += column_x + " + str(self.pad_w * 2) + ";\n"
+                retString += "            cols_8b += column_x + " + str(self.pad_left + self.pad_right) + ";\n"
             for j in range(self.kernel_w):
                 retString += self.__genMACStr(j, kercnt, self.stride)
                 kercnt += 1
@@ -384,11 +420,12 @@ class depthwiseInplace_mask(object):
         return retString
 
     def __genConvStringCWH(self):
+        # Shiming: fix padding
         retString = ""
         kercnt = 0
         for i in range(self.kernel_w):
             if i > 0:
-                retString += "            cols_8b += column_x + " + str(self.pad_h * 2) + ";\n"
+                retString += "            cols_8b += column_x + " + str(self.pad_top + self.pad_bottom) + ";\n"
             for j in range(self.kernel_h):
                 retString += self.__genMACStr(j, kercnt, self.stride)
                 kercnt += 1
@@ -396,11 +433,12 @@ class depthwiseInplace_mask(object):
         return retString
 
     def __genConvLeftStringCWH(self):
+        # Shiming: fix padding
         retString = ""
         kercnt = 0
         for i in range(self.kernel_w):
             if i > 0:
-                retString += "            cols_8b += column_x + " + str(self.pad_h * 2) + ";\n"
+                retString += "            cols_8b += column_x + " + str(self.pad_top + self.pad_bottom) + ";\n"
             for j in range(self.kernel_h):
                 retString += self.__genLeftMACStr(j, kercnt, self.stride)
                 kercnt += 1
@@ -431,11 +469,12 @@ class depthwiseInplace_mask(object):
         return ret
 
     def __genConvLeftString(self):
+        # Shiming: fix padding
         retString = ""
         kercnt = 0
         for i in range(self.kernel_h):
             if i > 0:
-                retString += "            cols_8b += column_x + " + str(self.pad_w * 2) + ";\n"
+                retString += "            cols_8b += column_x + " + str(self.pad_left + self.pad_right) + ";\n"
             for j in range(self.kernel_w):
                 retString += self.__genLeftMACStr(j, kercnt, self.stride)
                 kercnt += 1
@@ -523,11 +562,12 @@ class depthwiseInplace_mask(object):
             cols_8b_iterptr += STRIDE;
         }
         """
+        # Shiming: fix padding
         if self.stride != 1:
-            retString += "cols_8b_iterptr += " + str(self.pad_w) + " * 2 - (column_x & 1);\n"
-            retString += "        cols_8b_iterptr += (STRIDE - 1) * (column_x + " + str(self.pad_w) + " * 2);\n"
+            retString += "cols_8b_iterptr += " + str(self.pad_left) + " + " + str(self.pad_right) + " - (column_x & 1);\n"
+            retString += "        cols_8b_iterptr += (STRIDE - 1) * (column_x + " + str(self.pad_left) + " + " + str(self.pad_right) + ");\n"
         else:
-            retString += "cols_8b_iterptr += " + str(self.pad_w) + " * 2;\n"
+            retString += "cols_8b_iterptr += " + str(self.pad_left) + " + " + str(self.pad_right) + ";\n"
 
         # end of function
         retString += """    }
@@ -615,11 +655,12 @@ class depthwiseInplace_mask(object):
             cols_8b_iterptr += STRIDE;
         }
         """
+        # Shiming: fix padding
         if self.stride != 1:
-            retString += "cols_8b_iterptr += " + str(self.pad_h) + " * 2 - (column_x & 1);\n"
-            retString += "        cols_8b_iterptr += (STRIDE - 1) * (column_x + " + str(self.pad_h) + " * 2);\n"
+            retString += "cols_8b_iterptr += " + str(self.pad_top) + " + " + str(self.pad_bottom) + " - (column_x & 1);\n"
+            retString += "        cols_8b_iterptr += (STRIDE - 1) * (column_x + " + str(self.pad_top) + " + " + str(self.pad_bottom) + ");\n"
         else:
-            retString += "cols_8b_iterptr += " + str(self.pad_h) + " * 2;\n"
+            retString += "cols_8b_iterptr += " + str(self.pad_top) + " + " + str(self.pad_bottom) + ";\n"
 
         # end of function
         retString += """    }

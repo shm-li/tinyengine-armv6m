@@ -28,7 +28,8 @@ default_params = {
 }
 
 
-class stridedSlice(basicOperator):
+# Shiming: Capital S
+class StridedSlice(basicOperator):
     ss_cnt = 0
 
     def __init__(self, params: dict) -> None:

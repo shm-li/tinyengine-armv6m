@@ -186,6 +186,8 @@ class tensor:
     byte_size = {
         "bool": 1,
         "int8": 1,
+        # Shiming:
+        "uint8": 1,
         "int32": 4,
         "fp32": 4,
         "float32": 4,

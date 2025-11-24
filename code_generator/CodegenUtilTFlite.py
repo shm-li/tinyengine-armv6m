@@ -61,7 +61,8 @@ def GenerateSourceFilesFromTFlite(
             patch_params=None,
             FP_output=False,
             profile_mode=False,
-            fp_requantize=True,
+            # Shiming: setting fp_requantize to False
+            fp_requantize=False,
             tflite_op=False,
             dummy_address=False,
             outputTables=outTable,

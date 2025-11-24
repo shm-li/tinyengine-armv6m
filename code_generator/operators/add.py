@@ -51,6 +51,13 @@ default_params = {
     "output2_c": None,
     "output2_idx": None,
     "output2_dtype": "int8",
+    # Shiming: output min and max
+    "fused_activation_function": None,
+    "output_activation_min": None,
+    "output_activation_max": None,
+    "broadcast": None,
+    "broadcast_on_axis": None,
+    "input2_const": None,
 }
 
 
@@ -88,35 +95,81 @@ class Add(basicOperator):
     def get_macs(self) -> int:
         p = self.params
         return p["output_h"] * p["output_w"] * p["output_c"]
+    
+    # Shiming: for ADD with constant input
+    def get_weights_size(self) -> int:
+        p = self.params
+        if p["input2_const"] is None: return 0
+        if p["input_dtype"] in {"float32", "fp32"}:
+            size = 4
+        else:
+            size = 1
+        return p["input2_h"] * p["input2_w"] * p["input2_c"] * size
 
-    def generate_inference_str(self):
+    # Shiming: Support non-fp-requantized version
+    def generate_inference_str(
+        self,
+        fp_requantize: bool = False,
+    ):
         string = ""
         params = self.params
-        if params["need_Bmask"]:
-            if USE_BIT_MASK:
+        if fp_requantize:
+            if params["need_Bmask"]:
+                if USE_BIT_MASK:
+                    string += (
+                        f"add_fpreq_bitmask({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
+                        + f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+                    )
+                else:
+                    string += f"add_fpreq_mask({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
+                    +f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
                 string += (
-                    f"add_fpreq_bitmask({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
-                    + f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+                    f"{str(params['input_scale'])},{str(params['input_zero_point'])},"
+                    + f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
+                    + f"{str(params['input2_scale'])},{str(params['input2_zero_point'])},"
+                    + f"{str(params['output_scale'])},{str(params['output_zero_point'])},"
+                    + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])},"
+                    + f"{self._getBufferstr(params['output2_buf_add'], params['output2_buf_add_offset'])});\n"
                 )
             else:
-                string += f"add_fpreq_mask({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
-                +f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-            string += (
-                f"{str(params['input_scale'])},{str(params['input_zero_point'])},"
-                + f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
-                + f"{str(params['input2_scale'])},{str(params['input2_zero_point'])},"
-                + f"{str(params['output_scale'])},{str(params['output_zero_point'])},"
-                + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])},"
-                + f"{self._getBufferstr(params['output2_buf_add'], params['output2_buf_add_offset'])});\n"
-            )
+                string += (
+                    f"add_fpreq({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
+                    + f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+                    + f"{str(params['input_scale'])},{str(params['input_zero_point'])},"
+                    + f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
+                    + f"{str(params['input2_scale'])},{str(params['input2_zero_point'])},"
+                    + f"{str(params['output_scale'])},{str(params['output_zero_point'])},"
+                    + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+                )
         else:
+            # Construct ADD_params right here
             string += (
-                f"add_fpreq({str(int(params['input_h']*params['input_w']*params['input_c']))}, "
-                + f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-                + f"{str(params['input_scale'])},{str(params['input_zero_point'])},"
-                + f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
-                + f"{str(params['input2_scale'])},{str(params['input2_zero_point'])},"
-                + f"{str(params['output_scale'])},{str(params['output_zero_point'])},"
-                + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+                f"add_params.left_shift = {params['left_shift']};\n"
+                f"add_params.input1_offset = {params['input_zero_point'] * -1};\n"
+                f"add_params.input1_multiplier = {params['input_multiplier']};\n"
+                f"add_params.input1_shift = {params['input_shift']};\n"
+                f"add_params.input2_offset = {params['input2_zero_point'] * -1};\n"
+                f"add_params.input2_multiplier = {params['input2_multiplier']};\n"
+                f"add_params.input2_shift = {params['input2_shift']};\n"
+                f"add_params.output_offset = {params['output_zero_point']};\n"
+                f"add_params.output_multiplier = {params['output_multiplier']};\n"
+                f"add_params.output_shift = {params['output_shift']};\n"
+                f"add_params.quantized_activation_min = {params['output_activation_min']};\n"
+                f"add_params.quantized_activation_max = {params['output_activation_max']};\n"
             )
+            func_name = "add"
+            size_info = str(int(params['input_h']*params['input_w']*params['input_c']))
+            if params["broadcast"] and (params["broadcast_on_axis"] == [1, 2]):
+                func_name += "_broadcast_axis_1_2"
+                size_info = "{:d}, {:d}, {:d}".format(params['input_h'], params['input_w'], params['input_c'])
+            string += (
+                f"{func_name}({size_info}, &add_params, "
+                + f"{self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+            )
+            if params["input2_const"] is not None:
+                string += f"constinput_{params['parsed_trainable']},"
+            else:
+                string += f"{self._getBufferstr(params['input2_buf_add'], params['input2_buf_add_offset'])},"
+            string += f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+            
         return string

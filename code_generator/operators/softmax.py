@@ -4,28 +4,34 @@ from .basic_utils import basicOperator, deep_copy_dicts, overwrite_dicts
 
 default_params = {
     # op related
-    "op": "RESHAPE",
+    "op": "SOFTMAX",
     "input_idx": None,
     "output_idx": None,
     # tensor related
+    "input_idx": None,
     "input_h": None,
     "input_w": None,
     "input_c": None,
-    "output_dim": None,
+    "output_idx": None,
     "output_h": None,
     "output_w": None,
     "output_c": None,
-    "input_dtype": None, #"float32",
-    "output_dtype": None, #"float32",
-    # Shiming: shape info
-    "shape_idx": None,
-    "shape": None,
-    # Shiming: added a flag
-    "keep_length": None,
+    "input_dtype": None,
+    "output_dtype": None, 
+    # quantization related
+    "input_zero_point": None,
+    "input_scale": None,
+    "output_zero_point": None,
+    "output_scale": None,
+    # Softmax related
+    "beta": None,
+    "input_multiplier": None,
+    "input_left_shift": None,
+    "diff_min": None,
 }
 
 
-class Reshape(basicOperator):
+class Softmax(basicOperator):
     def __init__(self, params: dict) -> None:
         self.params = deep_copy_dicts(default_params)
         overwrite_dicts(self.params, params)
@@ -49,20 +55,16 @@ class Reshape(basicOperator):
             warnings.warn(f"parameters are not all set for op {self.params['op']}")
 
     def generate_inference_str(self):
-        # params = self.params
-        # if params["input_dtype"] == "float32":
-        #     if params["output_w"] == params["output_h"] == 1:
-        #         string = (
-        #             f"reshape_3dto1d({self._getBufferstrCast(params['input_buf_add'], params['input_buf_add_offset'])},"
-        #         )
-        #         string += f"{params['input_h']},{params['input_w']},{params['input_c']},"
-        #         string += f"{self._getBufferstrCast(params['output_buf_add'], params['output_buf_add_offset'])});\n"
-        #     else:
-        #         raise NotImplementedError
-        # else:
-        #     raise NotImplementedError
-        # return string
-        
-        # We have yet no impl if a reshape layer is not removed
-        raise NotImplementedError
-        return ""
+        string = ""
+        params = self.params
+        if params["input_dtype"] == "float32":
+            raise NotImplementedError("No support for f32 input in SOFTMAX")
+        else:
+            string += (
+                f"softmax_int8"
+                + f"({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+                + f"{str(int(params['input_h']*params['input_w']*params['input_c']))}, "
+                + f"{params['input_multiplier']},{params['input_left_shift']},{params['diff_min']}, "
+                + f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+            )
+        return string

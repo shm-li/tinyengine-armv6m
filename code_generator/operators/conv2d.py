@@ -6,6 +6,8 @@ from .basic_utils import basicOperator, deep_copy_dicts, isweightstr, overwrite_
 __all__ = ["Conv2d"]
 
 # USE_FP_REQ = True
+# Shiming: disable kbuf
+# USE_KBUF = False
 
 default_params = {
     # op related
@@ -47,6 +49,9 @@ default_params = {
     "padding": None,
     "padding_h": None,
     "padding_w": None,
+    #   Shiming: add offset
+    "padding_h_offset": None,
+    "padding_w_offset": None,
     "dilation_h": None,
     "dilation_w": None,
     # fof Q training
@@ -130,9 +135,12 @@ class Conv2d(basicOperator):
 
     def get_kbuf_size(self) -> int:
         p = self.params
+        # Shiming: we are not using kbuf at all
+        return 0
         if p["kernel_h"] == 1:
             return 0
         else:
+            print("TODO: Does conv kernel really use kbuf?")
             return self.get_weights_size() * 2  # 16bit
 
     def generate_inference_str(
@@ -218,8 +226,103 @@ class Conv2d(basicOperator):
             )
         else:
             kernel_h = params["kernel_h"]
+            # Shiming: Overwriting the original logic
+            input_c = params["input_c"]
+            has_pad = False
+            kernel_w = params["kernel_w"]
+            stride_h = params["stride_h"]
+            stride_w = params["stride_w"]
+            padding_h = params["padding_h"]
+            padding_w = params["padding_w"]
+            padding_h_offset = params["padding_h_offset"]
+            padding_w_offset = params["padding_w_offset"]
+            has_pad = (padding_h + padding_w \
+                       + padding_h_offset + padding_w_offset != 0)
+            pad_one_side = (
+                (padding_h == padding_w == 0)
+                and (padding_h_offset != 0)
+                and (padding_w_offset != 0)
+            )
+            if ((not FP_output)
+                and (kernel_h == kernel_w == 1)
+                and (not has_pad)
+                and (stride_h == stride_w == 1)
+            ):
+                function_name = "convolve_1x1_s8"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w == 1)
+                and (not has_pad)
+                and (stride_h == stride_w == 2)
+            ):
+                function_name = "convolve_s8_kernel1_stride2"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w == 3)
+                and (not has_pad)
+                and (stride_h == stride_w == 1)
+            ):
+                function_name = "convolve_s8_kernel3_stride1_nopad"
+            elif ((not FP_output)
+                and (kernel_h != 1)
+                and (kernel_w == 1)
+                and (padding_h == padding_w == 0)
+                and (stride_h == stride_w == 1)
+            ):
+                function_name = "convolve_s8_kernelnx1_stride1_nopad"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w == 3)
+                and (has_pad)
+                and (not pad_one_side)
+                and (padding_h == 1)
+                and (stride_h == stride_w == 1)
+                and (input_c % 4 == 0)
+            ):
+                function_name = "convolve_s8_kernel3_stride1_pad1"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w == 3)
+                and (has_pad)
+                and (not pad_one_side)
+                and (padding_h == 1)
+                and (stride_h == stride_w == 1)
+                and (input_c % 4 != 0)
+            ):
+                function_name = "convolve_s8_kernel3_stride1_pad1_oddch"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w == 3)
+                and (has_pad)
+                and (pad_one_side)
+                and (padding_h_offset == 1)
+                and (stride_h == stride_w == 1)
+            ):
+                function_name = "convolve_s8_kernel3_stride1_padoffset1"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w == 3)
+                and (has_pad)
+                and (pad_one_side)
+                and (padding_h_offset == 1)
+                and (stride_h == stride_w == 2)
+                and (input_c % 4 == 0)
+            ):
+                function_name = "convolve_s8_kernel3_stride2_padoffset1"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w == 3)
+                and (has_pad)
+                and (pad_one_side)
+                and (padding_h_offset == 1)
+                and (stride_h == stride_w == 2)
+                and (input_c % 4 != 0)
+            ):
+                function_name = "convolve_s8_kernel3_stride2_padoffset1_oddch"
+            elif ((not FP_output)
+                and (kernel_h == kernel_w)
+                and (has_pad)
+                and (not pad_one_side)
+                and (padding_h == padding_w)
+                and (stride_h == stride_w)
+            ):
+                function_name = "convolve_s8_kernelnxn_stridenxn_padnxn"
+
             # function name
-            if params["kernel_h"] == 1:
+            elif params["kernel_h"] == 1:
                 # find the proper function
                 if params["output_c"] % 2 != 0:
                     if (
@@ -255,7 +358,17 @@ class Conv2d(basicOperator):
             elif kernel_h == 3 and params["stride_h"] == 1 and params["padding"] == 1:
                 function_name = "convolve_s8_kernel3_stride1_pad1"
             else:
-                raise NotImplementedError
+                # Shiming: print it
+                raise NotImplementedError("No Impl for this type of conv: "
+                                          "kernel {},{}, "
+                                          "stride {},{}, "
+                                          "pad {}, {}, "
+                                          "pad_offset {},{}".format(
+                                              kernel_h, kernel_w,
+                                              stride_h, stride_w,
+                                              padding_h, padding_w,
+                                              padding_h_offset, padding_w_offset
+                                          ))
 
             if fp_requantize and not ("is_patch" in params and params["is_patch"] and kernel_h > 1):
                 function_name += "_fpreq"
@@ -281,6 +394,14 @@ class Conv2d(basicOperator):
                 )
             string += f"{str(params['input_w'])},{str(params['input_h'])},{str(params['input_c'])},"
             parsed_idx = str(params["parsed_trainable"])
+            # Shiming:
+            if function_name in ["convolve_s8_kernelnx1_stride1_nopad", 
+                                   ]:
+                string += f"{str(params['kernel_h'])},"
+            elif function_name in ["convolve_s8_kernelnxn_stridenxn_padnxn",
+                                   ]:
+                string += f"{str(params['kernel_h'])},{str(params['stride_h'])},{str(params['padding_h'])},"
+
             if params["first_k_channel"] is not None:  # partial channels in SRAM,
                 string += (
                     f"(const q7_t*)weight{parsed_idx},"
@@ -322,7 +443,9 @@ class Conv2d(basicOperator):
                 string += ",kbuf"
 
             # pad value for kernel size > 1
-            if kernel_h > 1:
+            # Shiming: change condition
+            # if kernel_h > 1:
+            if has_pad:
                 string += f",{str(params['input_zero_point'])}"
 
             # patch-based parameters

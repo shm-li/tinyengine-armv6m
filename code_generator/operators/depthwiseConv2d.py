@@ -44,6 +44,10 @@ default_params = {
     # for fp implementation
     "padding_h": None,
     "padding_w": None,
+    #   Shiming: add padding type and offset
+    "padding": None,
+    "padding_h_offset": None,
+    "padding_w_offset": None,
     "dilation_h": None,
     "dilation_w": None,
     "float_max": "FLT_MAX",
@@ -55,6 +59,8 @@ default_params = {
     "output2_c": None,
     "output2_idx": None,
     "output2_dtype": "int8",
+    # Shiming: add activation function params
+    "fused_activation_function": None,
 }
 
 
@@ -114,8 +120,12 @@ class DepthwiseConv2d(basicOperator):
 
     def get_sbuf_size(self) -> int:
         p = self.params
+        assert p["padding_h"] == p["padding_w"] and p["padding_h_offset"] == p["padding_w_offset"]
+        padding_size = p["padding_h_offset"] + p["padding_h"]
         if self.USE_INPLACE:
-            return 2 * (p["input_h"] + 2 * p["padding"]) * (p["input_w"] + 2 * p["padding"])  # 2 x resolution
+            # Shiming: we now change the definition of param padding
+            # return 2 * (p["input_h"] + 2 * p["padding"]) * (p["input_w"] + 2 * p["padding"])  # 2 x resolution
+            return 2 * (p["input_h"] + 2 * padding_size) * (p["input_w"] + 2 * padding_size)  # 2 x resolution
         else:
             return 2 * p["kernel_h"] * p["kernel_w"] * p["input_c"]  # 16 bit
 
@@ -198,8 +208,10 @@ class DepthwiseConv2d(basicOperator):
             else:
                 function_name = "depthwise_kernel"
 
+            # Shiming: rename
+            assert (params['padding_h'] == params['padding_w']) and (params['padding_h_offset'] == params['padding_w_offset'])
             function_name += (
-                f"{str(params['kernel_h'])}x{str(params['kernel_w'])}_stride{str(params['stride_h'])}_inplace_CHW"
+                f"{str(params['kernel_h'])}x{str(params['kernel_w'])}_stride{str(params['stride_h'])}_pad{str(params['padding_h'])}_padoffset{str(params['padding_h_offset'])}_inplace_CHW"
             )
 
             if fp_requantize and not ("is_patch" in params and params["is_patch"]):

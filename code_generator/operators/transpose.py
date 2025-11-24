@@ -19,16 +19,19 @@ default_params = {
     "input_vartype": None,
     "input_dtype": "float32",
     "output_dtype": "float32",
+    # Shiming:
+    "perm": None,
 }
 
-
-class transpose(basicOperator):
+# Shiming: upper case T
+class Transpose(basicOperator):
     def __init__(self, params: dict) -> None:
         self.params = deep_copy_dicts(default_params)
         overwrite_dicts(self.params, params)
         super().__init__()
         # handle input/output tensors in HWC format
-        if "weight" in self.params["input_idx"]:
+        # Shiming: ??
+        if (type(self.params["input_idx"]) == str) and ("weight" in self.params["input_idx"]):
             self.params["input_buf_add"] = self.params["input_idx"]
             self.params["input_buf_add_offset"] = 0
         else:
@@ -59,6 +62,20 @@ class transpose(basicOperator):
             string += f"{str(params['input_h'])},{str(params['input_w'])},{str(params['input_c'])},"
             string += f"{self._getBufferstrCast(params['output_buf_add'], params['output_buf_add_offset'])});\n"
         else:
-            raise NotImplementedError
+            # Shiming:
+            perm = params["perm"]
+            if (params["input_dtype"] == "int8" 
+                    and perm[0] == 0
+                    and perm[1] == 2
+                    and perm[2] == 1
+                    and perm[3] == 3
+            ):
+                string = (
+                    f"transpose_axis_1_2_int8({self._getBufferstrCast(params['input_buf_add'], params['input_buf_add_offset'])},"
+                )
+                string += f"{str(params['input_h'])},{str(params['input_w'])},{str(params['input_c'])},"
+                string += f"{self._getBufferstrCast(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+            else:
+                raise NotImplementedError
 
         return string

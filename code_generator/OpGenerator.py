@@ -42,19 +42,28 @@ class OpGenerator:
         incfile = includeFile(self.incpath)
         for op in op_list:
             if op.isDepthwise:
+                # Shiming: fix padding
                 if op.kernel_h > op.kernel_w:
                     depthwise_template = depthwiseInplace(
-                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, op.stride, "CWH", self.fp_requantize
+                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, 
+                        op.pad_h_offset, op.pad_w_offset,
+                        op.stride, "CWH", self.fp_requantize
                     )
                 else:
                     depthwise_template = depthwiseInplace(
-                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, op.stride, "CHW", self.fp_requantize
+                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, 
+                        op.pad_h_offset, op.pad_w_offset,
+                        op.stride, "CHW", self.fp_requantize
                     )
                     depthwise_template_mask = depthwiseInplace_mask(
-                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, op.stride, "CHW", self.fp_requantize
+                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, 
+                        op.pad_h_offset, op.pad_w_offset,
+                        op.stride, "CHW", self.fp_requantize
                     )
                     depthwise_template_bitmask = depthwiseInplace_bitmask(
-                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, op.stride, "CHW", self.fp_requantize
+                        op.kernel_h, op.kernel_w, op.pad_h, op.pad_w, 
+                        op.pad_h_offset, op.pad_w_offset,
+                        op.stride, "CHW", self.fp_requantize
                     )
                 depthwise_template.genFile(self.srcpath)
                 incfile.addDefine(depthwise_template.genFuncDefine())
@@ -74,8 +83,13 @@ class convOp:
             isDepthwise = True
         kernel_h = layer_info["kernel_h"]
         kernel_w = layer_info["kernel_w"]
-        pad_h = (kernel_h - 1) // 2
-        pad_w = (kernel_w - 1) // 2
+        # Shiming: fix padding
+        pad_h = layer_info["padding_h"]
+        pad_w = layer_info["padding_w"]
+        pad_h_offset = layer_info["padding_h_offset"]
+        pad_w_offset = layer_info["padding_w_offset"]
+        # pad_h = (kernel_h - 1) // 2
+        # pad_w = (kernel_w - 1) // 2
         stride = layer_info["stride_h"]
         self.inchannel = layer_info["input_c"]
         self.isDepthwise = isDepthwise
@@ -84,6 +98,8 @@ class convOp:
         self.stride = stride
         self.pad_h = pad_h
         self.pad_w = pad_w
+        self.pad_h_offset = pad_h_offset
+        self.pad_w_offset = pad_w_offset
 
     def __eq__(self, other):
         if isinstance(other, convOp):
@@ -94,6 +110,8 @@ class convOp:
                 and self.stride == other.stride
                 and self.pad_h == other.pad_h
                 and self.pad_w == other.pad_w
+                and self.pad_h_offset == other.pad_h_offset
+                and self.pad_w_offset == other.pad_w_offset
             ):
                 return True
             else:

@@ -2,9 +2,9 @@ import math
 
 import numpy as np
 
-from code_generator.operators import add
+from code_generator.operators import mul
 from code_generator.tflite import Model
-from code_generator.tflite.AddOptions import AddOptions
+from code_generator.tflite.MulOptions import MulOptions
 
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -13,12 +13,13 @@ from .utils import (
     get_nhwc_from_shape, 
     get_np_from_wrapper,
     get_output_tensors, 
+    getMultiplierShift,
     getOpCodeStr, 
     getTensorTypeStr
 )
 
 
-def parse_add(op, model: Model.Model):
+def parse_mul(op, model: Model.Model):
     # operator
     op_code_str = getOpCodeStr(op, model)
 
@@ -39,9 +40,7 @@ def parse_add(op, model: Model.Model):
     _, input_h, input_w, input_c = get_nhwc_from_shape(input_tensor.tensor.ShapeAsNumpy())
     _, input2_h, input2_w, input2_c = get_nhwc_from_shape(input2_tensor.tensor.ShapeAsNumpy())
     _, output_h, output_w, output_c = get_nhwc_from_shape(output_tensor.tensor.ShapeAsNumpy())
-    # assert input_h == input2_h == output_h, "tensor shpae not consistent"
-    # assert input_w == input2_w == output_w, "tensor shpae not consistent"
-    # assert input_c == input2_c == output_c, "tensor shpae not consistent"
+
     broadcast = False
     broadcast_on_axis = [1, 2, 3]
     if (
@@ -50,7 +49,7 @@ def parse_add(op, model: Model.Model):
         and input_c == input2_c == output_c
     ):
         # common mul
-        pass
+        raise NotImplementedError
     else:
         broadcast = True
         if input_h == input2_h == output_h:
@@ -60,6 +59,10 @@ def parse_add(op, model: Model.Model):
         if input_c == input2_c == output_c:
             broadcast_on_axis.remove(3)
         assert broadcast_on_axis != []
+        # broadcast mul
+    #assert input_h == input2_h == output_h, "tensor shpae not consistent"
+    #assert input_w == input2_w == output_w, "tensor shpae not consistent"
+    #assert input_c == input2_c == output_c, "tensor shpae not consistent"
 
     # tensor types
     input_type = getTensorTypeStr(input_tensor.tensor.Type())
@@ -82,7 +85,7 @@ def parse_add(op, model: Model.Model):
     input2_shift = None
     output_multiplier = None
     output_shift = None
-
+    
     # quantized setting
     if input_type != "float32":
         input_zero_point = input_tensor.qnn_params["zero_point"]
@@ -96,21 +99,23 @@ def parse_add(op, model: Model.Model):
 
     if "float32" not in [output_type, input_type, input_type2]:
         # get multipliers and shifts
-        (
-            left_shift,
-            input_multiplier,
-            input_shift,
-            input2_multiplier,
-            input2_shift,
-            output_multiplier,
-            output_shift,
-        ) = _getADDMultiplierShift(input_scale, input2_scale, output_scale)
+        real_output_scale = np.double(input_scale * input2_scale / output_scale)
+
+        input_multiplier, input_shift = getMultiplierShift([input_scale])
+        input_multiplier = input_multiplier[0]
+        input_shift = input_shift[0]
+        input2_multiplier, input2_shift = getMultiplierShift([input2_scale])
+        input2_multiplier = input2_multiplier[0]
+        input2_shift = input2_shift[0]
+        output_multiplier, output_shift = getMultiplierShift([real_output_scale])
+        output_multiplier = output_multiplier[0]
+        output_shift = output_shift[0]
     
     # Shiming: honestly check output min and max!!
     op_options = op.BuiltinOptions()
-    add_options = AddOptions()
-    add_options.Init(op_options.Bytes, op_options.Pos)
-    fused_act_func = add_options.FusedActivationFunction()
+    mul_options = MulOptions()
+    mul_options.Init(op_options.Bytes, op_options.Pos)
+    fused_act_func = mul_options.FusedActivationFunction()
     if output_type == "int8":
         output_activation_min = -128
         output_activation_max = 127
@@ -129,20 +134,18 @@ def parse_add(op, model: Model.Model):
     else:
         output_activation_min = None
         output_activation_max = None
-    pot_scale_int16 = add_options.PotScaleInt16()
-    if not pot_scale_int16: raise NotImplementedError
 
     # assign params
     params = {
         # operator
         "op": op_code_str,
         # tensor
-        "input_idx": input_tensor.tensor_idx,
-        "input2_idx": input2_tensor.tensor_idx,
-        "output_idx": output_tensor.tensor_idx,
         "input_dtype": input_type,
         "input2_dtype": input_type2,
         "output_dtype": output_type,
+        "input_idx": input_tensor.tensor_idx,
+        "input2_idx": input2_tensor.tensor_idx,
+        "output_idx": output_tensor.tensor_idx,
         "input_h": input_h,
         "input_w": input_w,
         "input_c": input_c,
@@ -181,43 +184,7 @@ def parse_add(op, model: Model.Model):
         # Shiming: might be mul with const
         "input2_const": input2_const,
     }
-    op = add.Add(params)
+    op = mul.Mul(params)
 
     return op
 
-
-def _getSigShift(s):
-    sig, shi = math.frexp(s)
-    sig = int(round(sig * 2**31))
-    if sig == 2**31:
-        sig /= 2
-        shi += 1
-    if shi < -31:
-        shi = 0
-        sig = 0
-
-    return sig, shi
-
-
-def _getADDMultiplierShift(input_scale, input2_scale, output_scale):
-    # Shiming: 20 if int8, 15 if int16. We support only in8 yet.
-    left_shift = 20
-
-    twice_max_input_scale = 2 * np.double(max(input_scale, input2_scale))
-    real_input1_multiplier = np.double(input_scale / twice_max_input_scale)
-    real_input2_multiplier = np.double(input2_scale / twice_max_input_scale)
-    real_output_multiplier = np.double(twice_max_input_scale / ((1 << left_shift) * output_scale))
-
-    input_multiplier, input_shift = _getSigShift(real_input1_multiplier)
-    input2_multiplier, input2_shift = _getSigShift(real_input2_multiplier)
-    output_multiplier, output_shift = _getSigShift(real_output_multiplier)
-
-    return (
-        left_shift,
-        input_multiplier,
-        input_shift,
-        input2_multiplier,
-        input2_shift,
-        output_multiplier,
-        output_shift,
-    )

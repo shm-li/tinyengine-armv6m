@@ -376,6 +376,8 @@ void invoke_1patch(uint16_t pad_t, uint16_t pad_b, uint16_t pad_l ,uint16_t pad_
         for i, op in enumerate(schedule.layer):
             layer_info = op.get_layer_info()
             string = "/* layer " + str(i) + ":" + layer_info["op"] + " */\n"
+            # Shiming: write OP number
+            string += "#ifndef ON_BOARD_TEST\n printf(\"=== OP {:d}, {:s} ===\\r\\n\"); fflush(stdout); \n #endif\n".format(i, layer_info["op"])
             fp.write(string)
 
             if layer_info["op"] == "CONV_2D":
@@ -424,6 +426,8 @@ void invoke_1patch(uint16_t pad_t, uint16_t pad_b, uint16_t pad_l ,uint16_t pad_
         for i, op in enumerate(schedule.layer):
             layer_info = op.get_layer_info()
             string = "/* layer " + str(i) + ":" + layer_info["op"] + " */\n"
+            # Shiming: write OP number
+            string += "#ifndef ON_BOARD_TEST\n printf(\"=== OP {:d}, {:s} ===\\r\\n\"); fflush(stdout); \n #endif\n".format(i, layer_info["op"])
             fp.write(string)
 
             if layer_info["op"] == "CONV_2D":
@@ -448,14 +452,15 @@ void invoke_1patch(uint16_t pad_t, uint16_t pad_b, uint16_t pad_l ,uint16_t pad_
                 )
                 fp.write(string)
 
-                if (
-                    layer_info["output_h"] == 1
-                    and layer_info["output_w"] == 1
-                    and (layer_info["output_c"] == 2 or layer_info["output_c"] == 10)
-                ):
-                    string = "}\n"
-                    fp.write(string)
-                    return
+                # Shiming: I don't understand this return
+                # if (
+                #     layer_info["output_h"] == 1
+                #     and layer_info["output_w"] == 1
+                #     and (layer_info["output_c"] == 2 or layer_info["output_c"] == 10)
+                # ):
+                #     string = "}\n"
+                #     fp.write(string)
+                #     return
 
             elif layer_info["op"] == "DEPTHWISE_CONV_2D":
                 string = self._genOpstr(op, self.fp_requantize)
@@ -765,6 +770,14 @@ signed char* getOutput() {
 
                     layer_info["parsed_trainable"] = self.parse_count
                     self.parse_count += 1
+            # Shiming: MUL and ADD might have const inputs
+            elif layer_info["op"] in {"MUL", "ADD"}:
+                if self._parseConstInputs(
+                    self.parse_count,
+                    layer_info
+                ): 
+                    layer_info["parsed_trainable"] = self.parse_count
+                    self.parse_count += 1
 
     def _parseCWHWeight(self, Lindex, weight, height, width, channel):
         fp = self.header_handle
@@ -885,6 +898,24 @@ signed char* getOutput() {
         string = f"signed char *weight{str(Lindex)} = &{mem_str};\n"
         string += f"float *weight_fp{str(Lindex)} = (float *)&{mem_str};\n"
         fp.write(string)
+    
+
+    # Shiming: for parsing const inputs for MUL and ADD layers
+    def _parseConstInputs(self, Lindex, layer_info):
+        if layer_info["input2_const"] is not None:
+            fp = self.header_handle
+            input2 = layer_info["input2_const"]
+
+            string = f"const int8_t constinput_" + str(Lindex) + "[" + str(len(input2)) + "] = {"
+            fp.write(string)
+            for _, value in enumerate(input2):
+                value = int(value)
+                fp.write(str(value) + ", ")
+            fp.write("};\n")
+            return True
+        return False
+
+
 
     def _parseoffsetBias(self, Lindex, bias, input_offset, weight, channel, bias_name=None, is_const=True):
         fp = self.header_handle
@@ -894,18 +925,20 @@ signed char* getOutput() {
         kernelsize = int(len(weight) / channel)
         # fuse the offset into bias
         for i in range(channel):
+            # Shiming casting tmpW to int32
             tmpW = 0
             for j in range(kernelsize):
-                tmpW += weight[j * channel + i]
+                tmpW += int(weight[j * channel + i])
             fp.write(str(self.int32_clip(bias[i] + tmpW * input_offset)) + ", ")
         fp.write("};\n")
         string = f"{const_str}int32_t offsetRBias" + str(Lindex) + "[" + str(len(bias)) + "] = {"
         fp.write(string)
         kernelsize = int(len(weight) / channel)
         for i in range(channel):
+            # Shiming casting tmpW to int32
             tmpW = 0
             for j in range(kernelsize):
-                tmpW += weight[j * channel + i]
+                tmpW += int(weight[j * channel + i])
             fp.write(str(bias[i] + tmpW * input_offset - self.int32_clip(bias[i] + tmpW * input_offset)) + ", ")
         fp.write("};\n")
 
@@ -961,9 +994,10 @@ signed char* getOutput() {
 
 
 def _findtheinferenceOutput(layers):
-    for cnt, op in enumerate(layers):
-        if op.params["output_dtype"] != "int8":
-            return layers[cnt - 1].params["output_buf_add_offset"]
+    # Shiming: Why?? I'm commenting this out
+    # for cnt, op in enumerate(layers):
+    #     if op.params["output_dtype"] != "int8":
+    #         return layers[cnt - 1].params["output_buf_add_offset"]
     return layers[-1].params["output_buf_add_offset"]
 
 

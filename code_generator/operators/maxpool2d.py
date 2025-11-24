@@ -30,8 +30,11 @@ default_params = {
     "filter_w": None,
     "stride_h": None,
     "stride_w": None,
-    "pad_h": None,
-    "pad_w": None,
+    # Shiming:
+    "padding_h": None,
+    "padding_w": None,
+    "padding_h_offset": None,
+    "padding_w_offset": None,
     "input_idx": None,
     "output_idx": None,
     # tensor related
@@ -79,11 +82,45 @@ class maxPool2d(basicOperator):
 
     def generate_inference_str(self):
         params = self.params
-        string = f"max_pooling({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
-        string += (
-            f"{str(params['input_h'])},{str(params['input_w'])},{str(params['input_c'])},{str(params['stride_h'])},"
-        )
-        string += f"{str(params['stride_w'])},{str(params['output_h'])},{str(params['output_w'])},-128,127,"
-        string += f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+        # Shiming: fix params
+        filter_h = params["filter_h"]
+        filter_w = params["filter_w"]
+        stride_h = params["stride_h"]
+        stride_w = params["stride_w"]
+        padding_h = params["padding_h"]
+        padding_w = params["padding_w"]
+        padding_h_offset = params["padding_h_offset"]
+        padding_w_offset = params["padding_w_offset"]
+        has_pad = (padding_h + padding_w \
+                    + padding_h_offset + padding_w_offset != 0)
+        if ((filter_h == stride_h)
+            and (filter_w == stride_w)
+            and (not has_pad)
+        ): # simple max_pooling
+            string = f"max_pooling({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+            string += (
+                f"{str(params['input_h'])},{str(params['input_w'])},{str(params['input_c'])},{str(params['stride_h'])},"
+            )
+            string += f"{str(params['stride_w'])},{str(params['output_h'])},{str(params['output_w'])},-128,127,"
+            string += f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])});\n"
+        elif ((filter_h == filter_w)
+            and (stride_h == stride_w)
+            # and (has_pad)
+            and (padding_h == padding_w)
+            and (padding_h_offset == padding_w_offset == 0)
+        ): # max_pooling with pad and stride different than filter size
+            string = f"max_pooling_filternxn_stridenxn_padnxn({self._getBufferstr(params['input_buf_add'], params['input_buf_add_offset'])},"
+            string += (
+                f"{str(params['input_h'])},{str(params['input_w'])},{str(params['input_c'])},"
+            )
+            string += (
+                f"{str(params['filter_h'])},{str(params['stride_h'])},{str(params['padding_h'])},"
+            )
+            string += f"{str(params['output_h'])},{str(params['output_w'])},-128,127,"
+            string += f"{self._getBufferstr(params['output_buf_add'], params['output_buf_add_offset'])}, {params['input_zero_point']});\n"
+        else:
+            print("filter ({:d}, {:d}), stride ({:d}, {:d}), pad ({:d}, {:d}, {:d}, {:d})".format(
+                filter_h, filter_w, stride_h, stride_w, padding_h, padding_w, padding_h_offset, padding_w_offset))
+            raise NotImplementedError
 
         return string

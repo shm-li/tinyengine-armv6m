@@ -26,7 +26,8 @@ op_name_translation = {
     "ResizeNearestNeighbor": "UPSAMPLE",
 }
 
-SKIP_OPs = {"QUANTIZE", "DEQUANTIZE", "RESHAPE"}  # TODO: Handle RESHAPE during codegen
+# Shiming: implemented quantize, reshape and softmax
+SKIP_OPs = {"DEQUANTIZE"}  # TODO: Handle RESHAPE during codegen
 
 FUSE_TILE_STR = "FUSE_TILE"
 FUSE_INT8CAST_STR = "FUSE_CAST"

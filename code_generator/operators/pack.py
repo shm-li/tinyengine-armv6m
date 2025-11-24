@@ -4,7 +4,7 @@ from .basic_utils import basicOperator, deep_copy_dicts, overwrite_dicts
 
 default_params = {
     # op related
-    "op": "RESHAPE",
+    "op": "PACK",
     "input_idx": None,
     "output_idx": None,
     # tensor related
@@ -17,15 +17,14 @@ default_params = {
     "output_c": None,
     "input_dtype": None, #"float32",
     "output_dtype": None, #"float32",
-    # Shiming: shape info
-    "shape_idx": None,
-    "shape": None,
-    # Shiming: added a flag
-    "keep_length": None,
+    # PACK related
+    "pack_tensor": None,
 }
 
 
-class Reshape(basicOperator):
+# TODO: This class is not completed. It is only used when it's associated with
+#   a RESHAPE layer and will eventually be removed from the computation graph.
+class Pack(basicOperator):
     def __init__(self, params: dict) -> None:
         self.params = deep_copy_dicts(default_params)
         overwrite_dicts(self.params, params)
@@ -49,20 +48,5 @@ class Reshape(basicOperator):
             warnings.warn(f"parameters are not all set for op {self.params['op']}")
 
     def generate_inference_str(self):
-        # params = self.params
-        # if params["input_dtype"] == "float32":
-        #     if params["output_w"] == params["output_h"] == 1:
-        #         string = (
-        #             f"reshape_3dto1d({self._getBufferstrCast(params['input_buf_add'], params['input_buf_add_offset'])},"
-        #         )
-        #         string += f"{params['input_h']},{params['input_w']},{params['input_c']},"
-        #         string += f"{self._getBufferstrCast(params['output_buf_add'], params['output_buf_add_offset'])});\n"
-        #     else:
-        #         raise NotImplementedError
-        # else:
-        #     raise NotImplementedError
-        # return string
-        
-        # We have yet no impl if a reshape layer is not removed
         raise NotImplementedError
         return ""
